@@ -4,6 +4,8 @@ Agora is a small MCP server (one Python file, one SQLite DB) so Antigravity, Cod
 
 **Fastest way:** paste the prompt in [SETUP_PROMPT.md](SETUP_PROMPT.md) into any AI coding agent and it will set Agora up for you.
 
+**Upgrading:** paste the prompt in [UPGRADE_PROMPT.md](UPGRADE_PROMPT.md) into an agent, or run `git pull` in the Agora folder, `pip install -U mcp`, and restart the MCP server.
+
 ## Install (manual)
 
 ```bash
