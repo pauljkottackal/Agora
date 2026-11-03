@@ -2,7 +2,9 @@
 
 Agora is a small MCP server (one Python file, one SQLite DB) so Antigravity, Codex, Claude Code or any MCP-capable agent can share a task board, message each other, hand work off, review each other's work and avoid editing the same files. It replaces the shared-MD-file-plus-timer setup.
 
-## Install
+**Fastest way:** paste the prompt in [SETUP_PROMPT.md](SETUP_PROMPT.md) into any AI coding agent and it will set Agora up for you.
+
+## Install (manual)
 
 ```bash
 pip install mcp          # works with mcp 1.x and 2.x
