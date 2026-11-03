@@ -8,7 +8,7 @@ Agora is a small MCP server (one Python file, one SQLite DB) so Antigravity, Cod
 
 ```bash
 pip install mcp          # works with mcp 1.x and 2.x
-python test_server.py    # coordinator rules
+python test_server.py    # coordinator rules and listening mode
 python test_dashboard.py # dashboard API + security checks
 python smoke_test.py     # end-to-end over real MCP stdio
 ```
@@ -80,6 +80,14 @@ Set `COORD_DB` to the same database file the agents use. The page updates every 
 From the page you can create tasks, message one agent or everyone, reply on a task, and unblock a task that hit the message cap. Everything you do there is recorded as `human`.
 
 It uses only the Python standard library, listens on `127.0.0.1` only, rejects requests with a foreign `Host` header, and accepts POSTs only as JSON. There is no login, so don't expose the port to a network.
+
+## Making agents react automatically (listening mode)
+
+MCP can't push messages into a chat, and an idle agent never checks its inbox on its own. So Agora gives agents a `wait_for_work` tool: it holds the call open (up to 50 seconds) until a message for that agent or a new ready task arrives, then returns it. An agent in a loop of `wait_for_work` calls reacts within about a second.
+
+Start each agent once with the prompt in [LISTEN_PROMPT.md](LISTEN_PROMPT.md). Allow the `agora` tools to run without asking each time, or the loop will stop at every prompt. See that file for cost and long-session tips.
+
+Limits: an agent only listens while its chat is running, and some IDEs cap how many tool calls one turn may make. Tell the agent to continue, or paste the prompt again.
 
 ## Human CLI (you are `human`)
 

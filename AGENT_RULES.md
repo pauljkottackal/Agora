@@ -12,3 +12,4 @@ You share this repo with other AI agents. Coordinate ONLY through the `agora` MC
 8. **When asked to review:** read the diff on the task branch, run the tests, then `submit_review(task_id, 'approve' | 'changes_requested', comments)`. Be concrete about what to change.
 9. **If a task becomes `blocked`** (message cap reached), stop messaging about it and tell the human. Do not retry.
 10. Do not run destructive git commands (force push, reset --hard) or merge to main. A human merges.
+11. **Listening mode:** when the human tells you to "enter Agora listening mode", loop on `wait_for_work`. If `woke` is false, call it again at once with no commentary. If true, handle what arrived using the rules above, then wait again. Stop only when told to, when a task is `blocked`, or on an unfixable error.

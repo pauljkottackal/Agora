@@ -122,5 +122,72 @@ class T(unittest.TestCase):
             s.MAX_MSGS_PER_TASK = 20
 
 
+    # ---- listening mode (wait_for_work)
+    def test_wait_returns_immediately_when_message_waiting(self):
+        import time
+        s.post_message("ping", to="antigravity")
+        as_agent("antigravity")
+        t0 = time.monotonic()
+        r = s.wait_for_work(10)
+        self.assertTrue(r["woke"])
+        self.assertLess(time.monotonic() - t0, 2)
+        self.assertEqual(r["messages"][0]["body"], "ping")
+        self.assertFalse(s.wait_for_work(0)["woke"])  # already consumed
+
+    def test_wait_times_out_quietly(self):
+        as_agent("antigravity")
+        r = s.wait_for_work(0)
+        self.assertFalse(r["woke"])
+        self.assertEqual(r["messages"], [])
+        self.assertIn("again", r["next"])
+
+    def test_wait_wakes_when_message_arrives_later(self):
+        import sqlite3, threading, time
+        as_agent("antigravity")
+        s.heartbeat()  # make sure the schema exists
+        s.POLL_SECONDS = 0.05
+
+        def late_sender():
+            time.sleep(0.4)
+            c = sqlite3.connect(os.environ["COORD_DB"])
+            c.execute("INSERT INTO messages(from_agent,to_agent,kind,body,created_at) VALUES('codex','antigravity','note','hello later',?)", (s._now(),))
+            c.commit(); c.close()
+
+        threading.Thread(target=late_sender, daemon=True).start()
+        t0 = time.monotonic()
+        try:
+            r = s.wait_for_work(10)
+        finally:
+            s.POLL_SECONDS = 1.0
+        self.assertTrue(r["woke"])
+        self.assertEqual(r["messages"][0]["body"], "hello later")
+        self.assertLess(time.monotonic() - t0, 3)
+
+    def test_wait_wakes_on_new_ready_task_from_someone_else(self):
+        import sqlite3, threading, time
+        as_agent("antigravity")
+        s.heartbeat()
+        s.POLL_SECONDS = 0.05
+
+        def late_creator():
+            time.sleep(0.3)
+            c = sqlite3.connect(os.environ["COORD_DB"])
+            c.execute("INSERT INTO tasks(title,status,created_by,created_at,updated_at) VALUES('new work','todo','human',?,?)", (s._now(), s._now()))
+            c.commit(); c.close()
+
+        threading.Thread(target=late_creator, daemon=True).start()
+        try:
+            r = s.wait_for_work(10)
+        finally:
+            s.POLL_SECONDS = 1.0
+        self.assertTrue(r["woke"])
+        self.assertEqual(r["new_tasks"][0]["title"], "new work")
+
+    def test_wait_does_not_wake_on_own_task(self):
+        as_agent("antigravity")
+        s.create_task("mine")
+        self.assertFalse(s.wait_for_work(0)["woke"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

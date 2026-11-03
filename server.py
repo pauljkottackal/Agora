@@ -15,11 +15,14 @@ import json
 import os
 import sqlite3
 import sys
+import time
 from datetime import datetime, timedelta, timezone
 
 DEFAULT_DB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "coordinator.db")
 
 LOCK_TTL_MIN = int(os.environ.get("LOCK_TTL_MIN", "30"))
+POLL_SECONDS = float(os.environ.get("AGORA_POLL", "1.0"))   # wait_for_work check interval
+MAX_WAIT_SECONDS = 50                                       # stay under typical tool timeouts
 MAX_MSGS_PER_TASK = int(os.environ.get("MAX_MSGS_PER_TASK", "20"))
 
 # Statuses an agent may set directly with update_status.
@@ -551,6 +554,70 @@ def list_locks() -> list:
     with db() as c:
         _purge_expired_locks(c)
         return [dict(r) for r in c.execute("SELECT * FROM file_locks ORDER BY path")]
+
+
+@mcp.tool()
+def wait_for_work(timeout_seconds: int = 25) -> dict:
+    """LISTENING MODE. Blocks until a message for you arrives or another agent creates a new
+    ready task, for up to timeout_seconds (max 50), then returns what happened.
+    If `woke` is false nothing happened: call this tool again straight away.
+    If `woke` is true, handle the messages/new_tasks using the Agora rules, then call this
+    tool again. Also refreshes your presence on the board."""
+    me = _agent()
+    timeout = max(0, min(int(timeout_seconds), MAX_WAIT_SECONDS))
+    started = _now()
+    with db():
+        pass  # heartbeat
+    deadline = time.monotonic() + timeout
+    while True:
+        conn = sqlite3.connect(_db_path(), timeout=10)
+        try:
+            unread = _count_unread(conn, me)
+            fresh = conn.execute(
+                "SELECT COUNT(*) FROM tasks WHERE status='todo' AND created_at>=? AND created_by!=? "
+                "AND (depends_on IS NULL OR depends_on IN (SELECT id FROM tasks WHERE status='done'))",
+                (started, me),
+            ).fetchone()[0]
+        finally:
+            conn.close()
+        if unread or fresh or time.monotonic() >= deadline:
+            break
+        time.sleep(POLL_SECONDS)
+
+    inbox = read_inbox(mark_read=True)
+    with db() as c:
+        new_tasks = [
+            dict(r)
+            for r in c.execute(
+                "SELECT id, title, description, created_by FROM tasks WHERE status='todo' "
+                "AND created_at>=? AND created_by!=? "
+                "AND (depends_on IS NULL OR depends_on IN (SELECT id FROM tasks WHERE status='done'))",
+                (started, me),
+            )
+        ]
+        pending = {
+            "awaiting_my_review": [
+                dict(r) for r in c.execute(
+                    "SELECT id, title FROM tasks WHERE reviewer=? AND status='review'", (me,))
+            ],
+            "changes_requested_on_mine": [
+                dict(r) for r in c.execute(
+                    "SELECT id, title FROM tasks WHERE owner=? AND status='changes_requested'", (me,))
+            ],
+            "my_in_progress": [
+                dict(r) for r in c.execute(
+                    "SELECT id, title FROM tasks WHERE owner=? AND status='in_progress'", (me,))
+            ],
+        }
+    woke = bool(inbox["messages"] or new_tasks)
+    return _ok(
+        woke=woke,
+        messages=inbox["messages"],
+        new_tasks=new_tasks,
+        pending=pending,
+        next=("Handle the items above, then call wait_for_work again." if woke
+              else "Nothing new. Call wait_for_work again."),
+    )
 
 
 # ---------------------------------------------------------------- human-only actions

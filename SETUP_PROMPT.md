@@ -44,6 +44,9 @@ Work through the steps in order. Run the commands yourself and fix problems you 
 8. DASHBOARD (optional, only for the first agent)
    Tell me how to open the web UI: run `PYTHON dashboard.py` in ~/agora with COORD_DB=DB set, then open http://127.0.0.1:8765. Do not start it yourself unless I ask.
 
+9. LISTENING MODE (optional)
+   Tell me that to make you react to messages automatically I can paste the listening prompt from ~/agora/LISTEN_PROMPT.md into your chat, and that your tool permissions should allow the agora tools without asking each time. Do not start the loop unless I ask.
+
 Safety rules: no force pushes, no deleting files, no changing anything outside ~/agora, ~/.agora, your own MCP config and your own rules file. If something is unclear or risky, stop and ask.
 ````
 
