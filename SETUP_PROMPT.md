@@ -41,6 +41,9 @@ Work through the steps in order. Run the commands yourself and fix problems you 
 7. REPORT
    Give me a short summary: OS, your AGENT_ID, PYTHON, DB, which config file you edited, which rules file you updated, and the result of `whoami`. Finish with this line for me to copy into the NEXT agent's setup: "Reuse COORD_DB=<DB> and pick a different AGENT_ID."
 
+8. DASHBOARD (optional, only for the first agent)
+   Tell me how to open the web UI: run `PYTHON dashboard.py` in ~/agora with COORD_DB=DB set, then open http://127.0.0.1:8765. Do not start it yourself unless I ask.
+
 Safety rules: no force pushes, no deleting files, no changing anything outside ~/agora, ~/.agora, your own MCP config and your own rules file. If something is unclear or risky, stop and ask.
 ````
 

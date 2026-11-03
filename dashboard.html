@@ -1,0 +1,398 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agora</title>
+<style>
+  :root {
+    --bg: #f6f6f3; --panel: #ffffff; --ink: #1c1c1a; --muted: #6b6b66; --line: #e3e3dd;
+    --accent: #3b5bdb; --accent-ink: #ffffff; --soft: #efefe9;
+    --todo: #8a8a84; --in_progress: #3b82f6; --review: #d99a06;
+    --changes_requested: #ea6a1f; --blocked: #dc3545; --done: #2f9e5b;
+    --radius: 10px; --shadow: 0 1px 2px rgba(0,0,0,.05); --chipL: 34%;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #141416; --panel: #1d1d21; --ink: #ececea; --muted: #9a9a94; --line: #2e2e33;
+      --accent: #7c93ff; --accent-ink: #11131f; --soft: #26262b;
+      --todo: #8f8f89; --in_progress: #5b9bff; --review: #e6ad2a;
+      --changes_requested: #f08a4b; --blocked: #ef5b69; --done: #4cc27f;
+      --shadow: none; --chipL: 75%;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    background: var(--bg); color: var(--ink);
+    font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  header {
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    padding: 14px 20px; border-bottom: 1px solid var(--line); background: var(--panel);
+    position: sticky; top: 0; z-index: 5;
+  }
+  .brand { display: flex; align-items: center; gap: 10px; font-weight: 650; font-size: 17px; letter-spacing: .2px; }
+  .mark {
+    width: 26px; height: 26px; border-radius: 7px; display: grid; place-items: center;
+    background: var(--accent); color: var(--accent-ink); font-weight: 700; font-size: 15px;
+  }
+  .meta { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; min-width: 0; }
+  .meta #db { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 46vw; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--done); flex: none; }
+  .dot.off { background: var(--blocked); }
+
+  main {
+    display: grid; grid-template-columns: minmax(0, 1fr) 320px; grid-template-rows: auto 1fr; gap: 16px;
+    padding: 16px 20px 28px; max-width: 1500px; margin: 0 auto;
+  }
+  main > * { min-width: 0; }
+  .stats { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+  .stat {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 999px;
+    padding: 4px 12px; font-size: 12px; color: var(--muted); display: flex; gap: 6px; align-items: center;
+  }
+  .stat b { color: var(--ink); font-weight: 650; }
+  .stat i { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+
+  .board { display: flex; gap: 12px; overflow-x: auto; padding-bottom: 8px; align-items: flex-start; }
+  .col { flex: 1 0 185px; min-width: 185px; background: var(--soft); border-radius: var(--radius); padding: 10px; }
+  .col h3 {
+    margin: 0 2px 10px; font-size: 12px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted);
+    display: flex; align-items: center; gap: 7px;
+  }
+  .col h3 i { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
+  .col h3 span { margin-left: auto; font-weight: 600; }
+  .card {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px 11px;
+    margin-bottom: 8px; cursor: pointer; box-shadow: var(--shadow); text-align: left; width: 100%;
+    font: inherit; color: inherit; display: block;
+  }
+  .card:hover { border-color: var(--accent); }
+  .card:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible {
+    outline: 2px solid var(--accent); outline-offset: 1px;
+  }
+  .card .id { color: var(--muted); font-size: 11px; }
+  .card .t { font-weight: 600; margin: 2px 0 8px; overflow-wrap: anywhere; }
+  .row { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; }
+  .empty { color: var(--muted); font-size: 12px; padding: 6px 2px; }
+
+  .chip {
+    display: inline-flex; align-items: center; gap: 5px; padding: 1px 8px; border-radius: 999px;
+    font-size: 11.5px; font-weight: 550; border: 1px solid transparent;
+  }
+  .badge { font-size: 11px; padding: 0 7px; border-radius: 6px; background: var(--soft); color: var(--muted); border: 1px solid var(--line); }
+  .pill { font-size: 12px; font-weight: 600; padding: 2px 10px; border-radius: 999px; color: #fff; }
+
+  aside { display: flex; flex-direction: column; gap: 14px; grid-row: span 2; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 14px; box-shadow: var(--shadow); }
+  .panel h2 { margin: 0 0 10px; font-size: 12px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted); }
+  .agent { display: flex; align-items: center; gap: 8px; padding: 5px 0; }
+  .agent .s { margin-left: auto; color: var(--muted); font-size: 12px; }
+  .agent .live { width: 8px; height: 8px; border-radius: 50%; background: var(--todo); }
+  .agent .live.on { background: var(--done); }
+  .lock { font: 12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; padding: 4px 0; overflow-wrap: anywhere; }
+  .lock small { color: var(--muted); font-family: inherit; }
+
+  form { display: flex; flex-direction: column; gap: 8px; }
+  label { font-size: 12px; color: var(--muted); display: flex; flex-direction: column; gap: 3px; }
+  input, select, textarea {
+    font: inherit; color: var(--ink); background: var(--bg); border: 1px solid var(--line);
+    border-radius: 7px; padding: 7px 9px; width: 100%;
+  }
+  textarea { resize: vertical; min-height: 58px; }
+  button.primary, button.ghost {
+    font: inherit; font-weight: 600; border-radius: 7px; padding: 7px 12px; cursor: pointer; border: 1px solid transparent;
+  }
+  button.primary { background: var(--accent); color: var(--accent-ink); }
+  button.ghost { background: transparent; color: var(--ink); border-color: var(--line); }
+  button:disabled { opacity: .5; cursor: default; }
+  .err { color: var(--blocked); font-size: 12px; min-height: 16px; }
+
+  .feeds { min-width: 0; }
+  .tabs { display: flex; gap: 6px; margin-bottom: 10px; }
+  .tab { background: transparent; border: 1px solid var(--line); color: var(--muted); border-radius: 999px; padding: 4px 14px; cursor: pointer; font: inherit; }
+  .tab[aria-selected="true"] { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+  .feed { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); max-height: 360px; overflow-y: auto; }
+  .msg { padding: 10px 14px; border-bottom: 1px solid var(--line); }
+  .msg:last-child { border-bottom: 0; }
+  .msg .h { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 4px; color: var(--muted); font-size: 12px; }
+  .msg .b { white-space: pre-wrap; overflow-wrap: anywhere; }
+  .msg a { color: var(--accent); cursor: pointer; text-decoration: none; }
+  .msg a:hover { text-decoration: underline; }
+  .ev { display: grid; grid-template-columns: 74px 96px 1fr; gap: 8px; padding: 6px 14px; border-bottom: 1px solid var(--line); font-size: 12.5px; }
+  .ev:last-child { border-bottom: 0; }
+  .ev .p { color: var(--muted); font: 11.5px ui-monospace, Menlo, Consolas, monospace; overflow-wrap: anywhere; }
+  .ev .t { color: var(--muted); }
+
+  dialog {
+    border: 1px solid var(--line); border-radius: 14px; background: var(--panel); color: var(--ink);
+    width: min(680px, calc(100vw - 24px)); max-height: calc(100vh - 40px); padding: 0;
+  }
+  dialog::backdrop { background: rgba(0,0,0,.45); }
+  .dlg-h { display: flex; gap: 10px; align-items: flex-start; justify-content: space-between; padding: 16px 18px 8px; }
+  .dlg-h h2 { margin: 0; font-size: 18px; overflow-wrap: anywhere; }
+  .dlg-b { padding: 0 18px 16px; display: flex; flex-direction: column; gap: 12px; }
+  .kv { display: grid; grid-template-columns: 90px 1fr; gap: 4px 10px; font-size: 13px; }
+  .kv dt { color: var(--muted); } .kv dd { margin: 0; overflow-wrap: anywhere; }
+  .desc { white-space: pre-wrap; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; }
+  .thread { border: 1px solid var(--line); border-radius: 8px; max-height: 240px; overflow-y: auto; }
+
+  @media (max-width: 900px) {
+    main { grid-template-columns: minmax(0, 1fr); grid-template-rows: none; padding: 12px 16px 24px; }
+    aside { grid-row: auto; order: 3; }
+    .feeds { order: 2; }
+    .meta #db { display: none; }
+    .ev { grid-template-columns: 64px 80px 1fr; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand"><span class="mark" aria-hidden="true">A</span> Agora</div>
+  <div class="meta"><span id="live" class="dot" title="connection"></span><span id="conn">connecting</span><span id="db"></span></div>
+</header>
+
+<main>
+  <div>
+    <div class="stats" id="stats"></div>
+    <div class="board" id="board" aria-label="Task board"></div>
+  </div>
+
+  <aside>
+    <section class="panel"><h2>Agents</h2><div id="agents"></div></section>
+    <section class="panel"><h2>File locks</h2><div id="locks"></div></section>
+    <section class="panel">
+      <h2>Message agents</h2>
+      <form id="msgForm">
+        <label>To <select id="msgTo"></select></label>
+        <label>About task <select id="msgTask"></select></label>
+        <label>Message <textarea id="msgBody" required></textarea></label>
+        <div class="err" id="msgErr"></div>
+        <button class="primary" type="submit">Send</button>
+      </form>
+    </section>
+    <section class="panel">
+      <h2>New task</h2>
+      <form id="taskForm">
+        <label>Title <input id="taskTitle" required maxlength="200"></label>
+        <label>Description / acceptance criteria <textarea id="taskDesc"></textarea></label>
+        <label>Depends on <select id="taskDep"></select></label>
+        <div class="err" id="taskErr"></div>
+        <button class="primary" type="submit">Create task</button>
+      </form>
+    </section>
+  </aside>
+
+  <section class="feeds">
+    <div class="tabs" role="tablist">
+      <button class="tab" role="tab" id="tabMsgs" aria-selected="true">Messages</button>
+      <button class="tab" role="tab" id="tabEvents" aria-selected="false">Activity</button>
+    </div>
+    <div class="feed" id="feed"></div>
+  </section>
+</main>
+
+<dialog id="dlg">
+  <div class="dlg-h"><h2 id="dTitle"></h2><button class="ghost" id="dClose" aria-label="Close">Close</button></div>
+  <div class="dlg-b">
+    <div class="row" id="dPill"></div>
+    <dl class="kv" id="dMeta"></dl>
+    <div class="desc" id="dDesc"></div>
+    <div id="dBlocked"></div>
+    <div class="thread" id="dThread"></div>
+    <form id="dForm">
+      <label>Reply to <select id="dTo"></select></label>
+      <textarea id="dBody" placeholder="Write a message about this task" required></textarea>
+      <div class="err" id="dErr"></div>
+      <div class="row"><button class="primary" type="submit">Send</button></div>
+    </form>
+  </div>
+</dialog>
+
+<script>
+"use strict";
+const STATUS = [
+  ["todo", "To do"], ["in_progress", "In progress"], ["review", "In review"],
+  ["changes_requested", "Changes requested"], ["blocked", "Blocked"], ["done", "Done"],
+];
+const LABEL = Object.fromEntries(STATUS);
+const HIDE_WHEN_EMPTY = new Set(["changes_requested", "blocked"]);
+const $ = (id) => document.getElementById(id);
+let S = null;           // latest state
+let openTask = null;    // task id in the drawer
+let tab = "msgs";
+
+const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+function hue(id) { let h = 0; for (const c of id) h = (h * 31 + c.charCodeAt(0)) % 360; return h; }
+function chip(id) {
+  if (!id) return '<span class="chip" style="background:var(--soft);color:var(--muted)">unassigned</span>';
+  const h = hue(id);
+  return `<span class="chip" style="background:hsl(${h} 70% 50% / .16);color:hsl(${h} 60% var(--chipL));border-color:hsl(${h} 70% 50% / .3)">${esc(id)}</span>`;
+}
+function ago(iso) {
+  const sec = Math.max(0, (Date.parse(S ? S.now : new Date().toISOString()) - Date.parse(iso)) / 1000);
+  if (isNaN(sec)) return "";
+  if (sec < 45) return "just now";
+  if (sec < 3600) return Math.round(sec / 60) + "m ago";
+  if (sec < 86400) return Math.round(sec / 3600) + "h ago";
+  return Math.round(sec / 86400) + "d ago";
+}
+const clock = (iso) => ago(iso);
+
+async function api(path, body) {
+  const r = await fetch(path, body ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : undefined);
+  const j = await r.json().catch(() => ({ ok: false, error: "bad response" }));
+  if (!r.ok && body) throw new Error(j.error || "request failed");
+  return j;
+}
+
+/* ---------- rendering ---------- */
+function setOptions(sel, options, keep) {
+  const sig = JSON.stringify(options);
+  if (sel.dataset.sig === sig) return;
+  const prev = keep ? sel.value : "";
+  sel.innerHTML = options.map(([v, t]) => `<option value="${esc(v)}">${esc(t)}</option>`).join("");
+  sel.dataset.sig = sig;
+  if (keep && [...sel.options].some((o) => o.value === prev)) sel.value = prev;
+}
+
+function render() {
+  const tasks = S.tasks;
+  const by = {}; STATUS.forEach(([k]) => (by[k] = []));
+  tasks.forEach((t) => (by[t.status] || (by[t.status] = [])).push(t));
+
+  $("db").textContent = S.db;
+  $("stats").innerHTML = STATUS.filter(([k]) => by[k].length || !HIDE_WHEN_EMPTY.has(k)).map(
+    ([k, n]) => `<span class="stat"><i style="background:var(--${k})"></i>${esc(n)} <b>${by[k].length}</b></span>`).join("");
+
+  $("board").innerHTML = STATUS.filter(([k]) => by[k].length || !HIDE_WHEN_EMPTY.has(k)).map(([k, name]) => `
+    <div class="col"><h3><i style="background:var(--${k})"></i>${esc(name)}<span>${by[k].length}</span></h3>
+    ${by[k].length ? by[k].map(card).join("") : '<div class="empty">Nothing here</div>'}</div>`).join("");
+
+  const now = Date.parse(S.now);
+  $("agents").innerHTML = S.agents.length ? S.agents.map((a) => {
+    const on = now - Date.parse(a.last_seen_at) < 120000;
+    return `<div class="agent"><span class="live ${on ? "on" : ""}"></span>${chip(a.id)}<span class="s">${on ? "active" : esc(ago(a.last_seen_at))}</span></div>`;
+  }).join("") : '<div class="empty">No agents have connected yet.</div>';
+
+  $("locks").innerHTML = S.locks.length ? S.locks.map((l) =>
+    `<div class="lock">${esc(l.path)}<br><small>${esc(l.owner)}${l.task_id ? " · task #" + l.task_id : ""}</small></div>`).join("")
+    : '<div class="empty">No files locked.</div>';
+
+  const names = S.agents.map((a) => a.id).filter((x) => x !== "human");
+  setOptions($("msgTo"), [["", "Everyone"], ...names.map((n) => [n, n])], true);
+  const taskOpts = tasks.filter((t) => t.status !== "done").map((t) => [String(t.id), `#${t.id} ${t.title}`]);
+  setOptions($("msgTask"), [["0", "General channel"], ...taskOpts], true);
+  setOptions($("taskDep"), [["0", "None"], ...tasks.map((t) => [String(t.id), `#${t.id} ${t.title}`])], true);
+
+  renderFeed();
+  if (openTask !== null) renderDrawer();
+}
+
+function card(t) {
+  const dep = t.depends_on ? `<span class="badge">needs #${t.depends_on}</span>` : "";
+  const rev = t.status === "review" && t.reviewer ? `<span class="badge">review: ${esc(t.reviewer)}</span>` : "";
+  return `<button class="card" data-id="${t.id}"><div class="id">#${t.id}</div><div class="t">${esc(t.title)}</div>
+    <div class="row">${chip(t.owner)}${rev}${dep}</div></button>`;
+}
+
+function msgHtml(m, withTask) {
+  const to = m.to_agent ? chip(m.to_agent) : '<span class="badge">everyone</span>';
+  const task = withTask && m.task_id ? `<a data-task="${m.task_id}">#${m.task_id} ${esc(m.task_title || "")}</a>` : "";
+  return `<div class="msg"><div class="h">${chip(m.from_agent)} → ${to}<span class="badge">${esc(m.kind)}</span>${task}<span style="margin-left:auto">${esc(clock(m.created_at))}</span></div><div class="b">${esc(m.body)}</div></div>`;
+}
+
+function renderFeed() {
+  const feed = $("feed");
+  const atBottom = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 40;
+  if (tab === "msgs") {
+    feed.innerHTML = S.messages.length ? S.messages.map((m) => msgHtml(m, true)).join("") : '<div class="msg empty">No messages yet.</div>';
+    if (atBottom) feed.scrollTop = feed.scrollHeight;
+  } else {
+    feed.innerHTML = S.events.length ? S.events.map((e) => `<div class="ev"><span class="t">${esc(clock(e.at))}</span><span>${chip(e.agent)}</span><span><b>${esc(e.action)}</b> <span class="p">${esc(brief(e.payload))}</span></span></div>`).join("") : '<div class="msg empty">No activity yet.</div>';
+  }
+}
+function brief(p) { try { const o = JSON.parse(p); return Object.entries(o).map(([k, v]) => `${k}=${Array.isArray(v) ? v.join(",") : v}`).join(" "); } catch { return p || ""; } }
+
+/* ---------- task drawer ---------- */
+function renderDrawer() {
+  const t = S.tasks.find((x) => x.id === openTask);
+  if (!t) { $("dlg").close(); return; }
+  $("dTitle").textContent = `#${t.id} ${t.title}`;
+  $("dPill").innerHTML = `<span class="pill" style="background:var(--${t.status})">${esc(LABEL[t.status] || t.status)}</span>`;
+  const dep = t.depends_on ? S.tasks.find((x) => x.id === t.depends_on) : null;
+  $("dMeta").innerHTML = `<dt>Owner</dt><dd>${chip(t.owner)}</dd><dt>Reviewer</dt><dd>${t.reviewer ? chip(t.reviewer) : "—"}</dd>
+    <dt>Approved by</dt><dd>${t.approved_by ? chip(t.approved_by) : "—"}</dd>
+    <dt>Depends on</dt><dd>${dep ? `#${dep.id} ${esc(dep.title)} (${esc(LABEL[dep.status])})` : "—"}</dd>
+    <dt>Branch</dt><dd>${esc(t.branch || "—")}</dd><dt>Created</dt><dd>${esc(t.created_by || "")} · ${esc(ago(t.created_at))}</dd>`;
+  $("dDesc").textContent = t.description || "No description.";
+  $("dDesc").style.display = t.description ? "" : "none";
+
+  const msgs = S.messages.filter((m) => m.task_id === t.id);
+  const agentMsgs = msgs.filter((m) => m.from_agent !== "human").length;
+  $("dBlocked").innerHTML = t.status === "blocked"
+    ? `<div class="panel" style="border-color:var(--blocked)"><b>Blocked.</b> The agents used ${agentMsgs} of ${S.max_msgs} allowed messages on this task. Unblocking resets the counter. <div class="row" style="margin-top:8px"><button class="primary" id="unblockBtn">Unblock</button></div><div class="err" id="unblockErr"></div></div>` : "";
+  const th = $("dThread");
+  const bottom = th.scrollHeight - th.scrollTop - th.clientHeight < 30;
+  th.innerHTML = msgs.length ? msgs.map((m) => msgHtml(m, false)).join("") : '<div class="msg empty">No messages on this task.</div>';
+  if (bottom) th.scrollTop = th.scrollHeight;
+  setOptions($("dTo"), [["", "Everyone"], ...S.agents.map((a) => a.id).filter((x) => x !== "human").map((n) => [n, n])], true);
+  if (!$("dTo").dataset.touched && t.owner && $("dTo").value === "") $("dTo").value = t.owner;
+}
+function showTask(id) {
+  openTask = id; $("dTo").dataset.touched = ""; $("dTo").dataset.sig = "";
+  renderDrawer(); if (!$("dlg").open) $("dlg").showModal();
+}
+
+/* ---------- events ---------- */
+$("board").addEventListener("click", (e) => { const c = e.target.closest(".card"); if (c) showTask(+c.dataset.id); });
+$("feed").addEventListener("click", (e) => { const a = e.target.closest("a[data-task]"); if (a) showTask(+a.dataset.task); });
+$("dClose").addEventListener("click", () => $("dlg").close());
+$("dlg").addEventListener("close", () => (openTask = null));
+$("dlg").addEventListener("click", (e) => { if (e.target === $("dlg")) $("dlg").close(); });
+$("dTo").addEventListener("change", () => ($("dTo").dataset.touched = "1"));
+$("dlg").addEventListener("click", async (e) => {
+  if (e.target.id !== "unblockBtn") return;
+  try { await api("/api/unblock", { task_id: openTask }); await refresh(); }
+  catch (err) { $("unblockErr").textContent = err.message; }
+});
+
+function tabTo(t) {
+  tab = t;
+  $("tabMsgs").setAttribute("aria-selected", t === "msgs"); $("tabEvents").setAttribute("aria-selected", t === "events");
+  if (S) renderFeed();
+}
+$("tabMsgs").onclick = () => tabTo("msgs"); $("tabEvents").onclick = () => tabTo("events");
+
+async function submit(form, errEl, path, bodyFn, clear) {
+  const btn = form.querySelector("button[type=submit]");
+  btn.disabled = true; errEl.textContent = "";
+  try { await api(path, bodyFn()); clear(); await refresh(); }
+  catch (err) { errEl.textContent = err.message; }
+  finally { btn.disabled = false; }
+}
+$("msgForm").addEventListener("submit", (e) => { e.preventDefault();
+  submit(e.target, $("msgErr"), "/api/message", () => ({ body: $("msgBody").value, to: $("msgTo").value, task_id: +$("msgTask").value }), () => ($("msgBody").value = "")); });
+$("taskForm").addEventListener("submit", (e) => { e.preventDefault();
+  submit(e.target, $("taskErr"), "/api/task", () => ({ title: $("taskTitle").value, description: $("taskDesc").value, depends_on: +$("taskDep").value }),
+    () => { $("taskTitle").value = ""; $("taskDesc").value = ""; }); });
+$("dForm").addEventListener("submit", (e) => { e.preventDefault();
+  submit(e.target, $("dErr"), "/api/message", () => ({ body: $("dBody").value, to: $("dTo").value, task_id: openTask }), () => ($("dBody").value = "")); });
+
+/* ---------- polling ---------- */
+async function refresh() {
+  try {
+    S = await api("/api/state");
+    $("live").classList.remove("off"); $("conn").textContent = "live";
+    render();
+  } catch {
+    $("live").classList.add("off"); $("conn").textContent = "disconnected";
+  }
+}
+refresh();
+setInterval(refresh, 2000);
+</script>
+</body>
+</html>

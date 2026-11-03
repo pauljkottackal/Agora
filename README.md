@@ -8,7 +8,8 @@ Agora is a small MCP server (one Python file, one SQLite DB) so Antigravity, Cod
 
 ```bash
 pip install mcp          # works with mcp 1.x and 2.x
-python test_server.py    # 9 unit tests
+python test_server.py    # coordinator rules
+python test_dashboard.py # dashboard API + security checks
 python smoke_test.py     # end-to-end over real MCP stdio
 ```
 
@@ -64,6 +65,22 @@ claude mcp add agora -e AGENT_ID=claude -e COORD_DB=/home/you/agora/coordinator.
 ### Tell the agents how to behave
 Paste `AGENT_RULES.md` into each tool's rules file (`AGENTS.md` for Codex, `GEMINI.md` or Antigravity rules, `CLAUDE.md`). This is what replaces your timer: agents check `read_inbox` at the start and after every step. MCP cannot push messages, so this instruction is essential.
 
+## Dashboard (web UI)
+
+```bash
+python dashboard.py            # http://127.0.0.1:8765   (set AGORA_PORT to change)
+```
+
+Set `COORD_DB` to the same database file the agents use. The page updates every 2 seconds and shows:
+
+- a kanban board (To do, In progress, In review, Changes requested, Blocked, Done) with owner and reviewer on each card
+- which agents are active, and which files are locked and by whom
+- the message feed and an activity log; click any task for its details and message thread
+
+From the page you can create tasks, message one agent or everyone, reply on a task, and unblock a task that hit the message cap. Everything you do there is recorded as `human`.
+
+It uses only the Python standard library, listens on `127.0.0.1` only, rejects requests with a foreign `Host` header, and accepts POSTs only as JSON. There is no login, so don't expose the port to a network.
+
 ## Human CLI (you are `human`)
 
 ```bash
@@ -93,4 +110,4 @@ Set `COORD_DB` in your shell so the CLI uses the same database.
 
 ## Next steps
 
-Read-only web dashboard (FastAPI) on the same SQLite file; a supervisor script that triggers `codex exec` when a task is assigned to it; automatic git worktree creation on `claim_task`.
+A supervisor script that triggers `codex exec` when a task is assigned to it; automatic git worktree creation on `claim_task`.

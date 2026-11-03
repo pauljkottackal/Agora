@@ -553,6 +553,26 @@ def list_locks() -> list:
         return [dict(r) for r in c.execute("SELECT * FROM file_locks ORDER BY path")]
 
 
+# ---------------------------------------------------------------- human-only actions
+# Deliberately NOT MCP tools: agents must not be able to unblock themselves.
+def unblock_task(task_id):
+    """Clear a task blocked by the message cap and reset its message counter."""
+    with db() as c:
+        t = _task(c, task_id)
+        if not t:
+            return _err(f"task {task_id} not found")
+        if t["status"] != "blocked":
+            return _err(f"task {task_id} is '{t['status']}', not blocked")
+        floor = c.execute("SELECT COALESCE(MAX(id),0) FROM messages").fetchone()[0]
+        new = "in_progress" if t["owner"] else "todo"
+        c.execute(
+            "UPDATE tasks SET status=?, msg_floor=?, updated_at=? WHERE id=?",
+            (new, floor, _now(), task_id),
+        )
+        _log(c, "unblock", {"task_id": task_id})
+        return _ok(task_id=task_id, status=new)
+
+
 # ---------------------------------------------------------------- human CLI
 def _cli(argv):
     os.environ["AGENT_ID"] = "human"
@@ -581,19 +601,10 @@ def _cli(argv):
         to = "" if rest[0] == "all" else rest[0]
         print(post_message(rest[1], to=to, task_id=int(rest[2]) if len(rest) > 2 else 0))
     elif cmd == "unblock" and rest:
-        tid = int(rest[0])
-        with db() as c:
-            t = _task(c, tid)
-            if not t:
-                sys.exit(f"task {tid} not found")
-            floor = c.execute("SELECT COALESCE(MAX(id),0) FROM messages").fetchone()[0]
-            new = "in_progress" if t["owner"] else "todo"
-            c.execute(
-                "UPDATE tasks SET status=?, msg_floor=?, updated_at=? WHERE id=?",
-                (new, floor, _now(), tid),
-            )
-            _log(c, "unblock", {"task_id": tid})
-        print(f"task {tid} unblocked -> {new} (message counter reset)")
+        r = unblock_task(int(rest[0]))
+        if not r["ok"]:
+            sys.exit(r["error"])
+        print(f"task {r['task_id']} unblocked -> {r['status']} (message counter reset)")
     elif cmd == "log":
         n = int(rest[0]) if rest else 30
         with db() as c:
