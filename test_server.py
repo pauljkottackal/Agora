@@ -251,5 +251,118 @@ class T(unittest.TestCase):
             s.STALE_MIN = old
 
 
+class GitTests(unittest.TestCase):
+    """Auto worktrees, review SHA, get_diff and the test gate, against a real temp repo."""
+    ENV = ("AGORA_REPO", "AGORA_AUTO_WORKTREE", "AGORA_WORKTREES", "AGORA_BASE", "AGORA_TEST_CMD",
+           "GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL")
+
+    def sh(self, *args, cwd=None):
+        import subprocess
+        return subprocess.run(args, cwd=cwd or self.repo, capture_output=True, text=True, check=True)
+
+    def setUp(self):
+        self.saved = {k: os.environ.get(k) for k in self.ENV}
+        self.tmp = tempfile.mkdtemp()
+        self.repo = os.path.join(self.tmp, "repo")
+        os.makedirs(self.repo)
+        for k in ("AUTHOR", "COMMITTER"):
+            os.environ[f"GIT_{k}_NAME"] = "t"
+            os.environ[f"GIT_{k}_EMAIL"] = "t@t"
+        self.sh("git", "init", "-q", "-b", "main")
+        open(os.path.join(self.repo, "a.txt"), "w").write("one\n")
+        self.sh("git", "add", ".")
+        self.sh("git", "commit", "-q", "-m", "init")
+        os.environ.update(AGORA_REPO=self.repo, AGORA_AUTO_WORKTREE="1", AGORA_BASE="main",
+                          AGORA_WORKTREES=os.path.join(self.tmp, "wt"),
+                          COORD_DB=os.path.join(self.tmp, "t.db"))
+        os.environ.pop("AGORA_TEST_CMD", None)
+        as_agent("codex")
+
+    def tearDown(self):
+        for k, v in self.saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+    def commit_in(self, wt, name, text):
+        open(os.path.join(wt, name), "w").write(text)
+        self.sh("git", "add", ".", cwd=wt)
+        self.sh("git", "commit", "-q", "-m", "work " + name, cwd=wt)
+
+    def test_claim_creates_branch_and_worktree(self):
+        t = s.create_task("t")["task_id"]
+        r = s.claim_task(t)
+        self.assertTrue(r["ok"])
+        self.assertEqual(r["branch"], f"agent/codex/task-{t}")
+        self.assertTrue(os.path.isdir(r["worktree"]))
+        self.assertEqual(s.list_tasks()[0]["worktree"], r["worktree"])
+
+    def test_claim_without_repo_still_succeeds_with_warning(self):
+        os.environ["AGORA_REPO"] = self.tmp            # not a git repository
+        t = s.create_task("t")["task_id"]
+        r = s.claim_task(t)
+        self.assertTrue(r["ok"])
+        self.assertIn("git_warning", r)
+
+    def test_worktree_is_reused_after_stale_release_and_reclaim(self):
+        t = s.create_task("t")["task_id"]
+        first = s.claim_task(t)
+        s.update_status(t, "todo")
+        as_agent("antigravity")
+        again = s.claim_task(t)
+        self.assertEqual(first["worktree"], again["worktree"])
+
+    def test_review_records_sha_and_get_diff_shows_changes(self):
+        t = s.create_task("t")["task_id"]
+        r = s.claim_task(t)
+        self.commit_in(r["worktree"], "b.txt", "new file\n")
+        self.assertTrue(s.request_review(t, "antigravity")["ok"])
+        as_agent("antigravity")
+        d = s.get_diff(t)
+        self.assertTrue(d["ok"])
+        self.assertIn("b.txt", d["stat"])
+        self.assertIn("+new file", d["diff"])
+        self.assertFalse(d["changed_since_review"])
+        self.assertEqual(d["reviewed_sha"], d["head_sha"])
+
+    def test_approve_refused_if_branch_moved_after_review_request(self):
+        t = s.create_task("t")["task_id"]
+        r = s.claim_task(t)
+        self.commit_in(r["worktree"], "b.txt", "v1\n")
+        s.request_review(t, "antigravity")
+        self.commit_in(r["worktree"], "c.txt", "sneaky\n")   # pushed after the review request
+        as_agent("antigravity")
+        self.assertTrue(s.get_diff(t)["changed_since_review"])
+        res = s.submit_review(t, "approve")
+        self.assertFalse(res["ok"])
+        self.assertIn("moved", res["error"])
+        # owner re-requests, reviewer can now approve the exact new commit
+        as_agent("codex")
+        self.assertTrue(s.request_review(t, "antigravity")["ok"])
+        as_agent("antigravity")
+        self.assertEqual(s.submit_review(t, "approve")["status"], "done")
+
+    def test_test_gate_blocks_failing_and_allows_passing(self):
+        t = s.create_task("t")["task_id"]
+        s.claim_task(t)
+        os.environ["AGORA_TEST_CMD"] = "echo boom && exit 1"
+        r = s.request_review(t, "antigravity")
+        self.assertFalse(r["ok"])
+        self.assertIn("boom", r["output"])
+        self.assertEqual(s.list_tasks()[0]["status"], "in_progress")
+        os.environ["AGORA_TEST_CMD"] = "exit 0"
+        self.assertTrue(s.request_review(t, "antigravity")["ok"])
+
+    def test_handoff_includes_branch_and_worktree(self):
+        t = s.create_task("t")["task_id"]
+        r = s.claim_task(t)
+        s.handoff(t, "antigravity", "did A", ["a.txt"], "do B", "run tests")
+        as_agent("antigravity")
+        body = s.read_inbox()["messages"][0]["body"]
+        self.assertIn(r["branch"], body)
+        self.assertIn(r["worktree"], body)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
