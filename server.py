@@ -13,7 +13,9 @@ and all of them point COORD_DB at the same SQLite file.
 import contextlib
 import json
 import os
+import re
 import sqlite3
+import subprocess
 import sys
 import time
 from datetime import datetime, timedelta, timezone
@@ -121,6 +123,10 @@ def db():
         if path not in _initialised_for:
             conn.execute("PRAGMA journal_mode=WAL")
             conn.executescript(SCHEMA)
+            cols = {r[1] for r in conn.execute("PRAGMA table_info(tasks)")}
+            for col in ("worktree", "review_sha"):      # added in 0.3; upgrade older databases
+                if col not in cols:
+                    conn.execute(f"ALTER TABLE tasks ADD COLUMN {col} TEXT")
             _initialised_for.add(path)
         conn.execute("BEGIN IMMEDIATE")
         try:
@@ -178,6 +184,88 @@ _UNSEEN_READY = (
     "(SELECT id FROM tasks WHERE status='done')) "
     "AND id NOT IN (SELECT task_id FROM task_seen WHERE agent_id=?)"
 )
+
+
+# ---------------------------------------------------------------- git helpers
+# All git features are optional and never make a tool call fail: problems come back as warnings.
+def _auto_worktree():
+    return os.environ.get("AGORA_AUTO_WORKTREE", "").lower() in ("1", "true", "yes")
+
+
+def _git(args, cwd, timeout=60):
+    return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, timeout=timeout)
+
+
+def _repo_root():
+    start = os.environ.get("AGORA_REPO") or os.getcwd()
+    try:
+        r = _git(["rev-parse", "--show-toplevel"], start)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return r.stdout.strip() if r.returncode == 0 else None
+
+
+def _base_ref():
+    return os.environ.get("AGORA_BASE", "HEAD")
+
+
+def _branch_sha(t):
+    root = _repo_root()
+    if not root or not t.get("branch"):
+        return None
+    try:
+        r = _git(["rev-parse", "--verify", "--quiet", t["branch"] + "^{commit}"], root)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return r.stdout.strip() if r.returncode == 0 else None
+
+
+def _attach_worktree(task_id, agent):
+    """Give a freshly claimed task its own branch and worktree. Reuses an existing one."""
+    root = _repo_root()
+    if not root:
+        return {"git_warning": "AGORA_AUTO_WORKTREE is on but no git repository was found. "
+                               "Set AGORA_REPO to the repository path."}
+    with db() as c:
+        t = _task(c, task_id)
+    if t.get("worktree") and os.path.isdir(t["worktree"]):
+        return {"branch": t["branch"], "worktree": t["worktree"]}
+    safe = re.sub(r"[^A-Za-z0-9._-]", "-", agent)
+    branch = t.get("branch") or f"agent/{safe}/task-{task_id}"
+    base = os.environ.get("AGORA_WORKTREES") or os.path.join(
+        os.path.dirname(root), os.path.basename(root) + "-worktrees")
+    path = os.path.join(base, f"task-{task_id}")
+    try:
+        os.makedirs(base, exist_ok=True)
+        exists = _git(["rev-parse", "--verify", "--quiet", "refs/heads/" + branch], root).returncode == 0
+        args = ["worktree", "add", path, branch] if exists else ["worktree", "add", "-b", branch, path, _base_ref()]
+        r = _git(args, root)
+    except (OSError, subprocess.SubprocessError) as e:
+        return {"git_warning": f"could not create worktree: {e}"}
+    if r.returncode != 0:
+        return {"git_warning": f"git worktree add failed: {r.stderr.strip()[:300]}"}
+    with db() as c:
+        c.execute("UPDATE tasks SET branch=?, worktree=? WHERE id=?", (branch, path, task_id))
+        _log(c, "worktree_created", {"task_id": task_id, "branch": branch, "path": path})
+    return {"branch": branch, "worktree": path}
+
+
+def _run_tests(t):
+    """Run AGORA_TEST_CMD (set by the human, never by agents) in the task's worktree.
+    Returns an error dict if it fails, otherwise None."""
+    cmd = os.environ.get("AGORA_TEST_CMD")
+    wt = t.get("worktree")
+    if not cmd or not wt or not os.path.isdir(wt):
+        return None
+    timeout = int(os.environ.get("AGORA_TEST_TIMEOUT", "300"))
+    try:
+        r = subprocess.run(cmd, shell=True, cwd=wt, capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return _err(f"tests did not finish within {timeout}s; review not requested")
+    if r.returncode != 0:
+        tail = (r.stdout + r.stderr)[-3000:]
+        return _err(f"tests failed (exit {r.returncode}); fix them before requesting review", output=tail)
+    return None
 
 
 def _recover_stale(c):
@@ -366,7 +454,10 @@ def claim_task(task_id: int) -> dict:
             (me, _now(), task_id),
         )
         _log(c, "claim_task", {"task_id": task_id})
-        return _ok(task_id=task_id, owner=me, status="in_progress")
+        result = _ok(task_id=task_id, owner=me, status="in_progress")
+    if _auto_worktree():
+        result.update(_attach_worktree(task_id, me))
+    return result
 
 
 @mcp.tool()
@@ -470,6 +561,8 @@ def handoff(task_id: int, to: str, summary: str, files_touched: list[str],
             f"Remaining: {remaining}\n"
             f"Verify: {verify}"
         )
+        if t["branch"]:
+            body += f"\nBranch: {t['branch']}" + (f"\nWorktree: {t['worktree']}" if t["worktree"] else "")
         ok, e = _insert_message(c, task_id, to, "handoff", body)
         if not ok:
             return e
@@ -491,12 +584,20 @@ def request_review(task_id: int, reviewer: str, note: str = "") -> dict:
     if reviewer == me:
         return _err("the reviewer must be a different agent than the owner")
     with db() as c:
+        pre = _task(c, task_id)
+    sha = None
+    if pre and pre["owner"] == me and pre["status"] in ("in_progress", "changes_requested", "review"):
+        failure = _run_tests(pre)          # outside any transaction: tests can be slow
+        if failure:
+            return failure
+        sha = _branch_sha(pre)
+    with db() as c:
         t = _task(c, task_id)
         if not t:
             return _err(f"task {task_id} not found")
         if t["owner"] != me:
             return _err(f"only the owner ({t['owner']}) can request review for task {task_id}")
-        if t["status"] not in ("in_progress", "changes_requested"):
+        if t["status"] not in ("in_progress", "changes_requested", "review"):   # 'review' = re-request
             return _err(f"cannot request review for a task that is '{t['status']}'")
         ok, e = _insert_message(
             c, task_id, reviewer, "review",
@@ -506,8 +607,8 @@ def request_review(task_id: int, reviewer: str, note: str = "") -> dict:
             return e
         _release_locks(c, me, task_id)
         c.execute(
-            "UPDATE tasks SET status='review', reviewer=?, approved_by=NULL, updated_at=? WHERE id=?",
-            (reviewer, _now(), task_id),
+            "UPDATE tasks SET status='review', reviewer=?, approved_by=NULL, review_sha=?, updated_at=? WHERE id=?",
+            (reviewer, sha, _now(), task_id),
         )
         _log(c, "request_review", {"task_id": task_id, "reviewer": reviewer})
         w = _unknown_agent_warning(c, reviewer)
@@ -522,6 +623,9 @@ def submit_review(task_id: int, verdict: str, comments: str = "") -> dict:
     if verdict not in ("approve", "changes_requested"):
         return _err("verdict must be 'approve' or 'changes_requested'")
     with db() as c:
+        pre = _task(c, task_id)
+    head = _branch_sha(pre) if pre else None
+    with db() as c:
         t = _task(c, task_id)
         if not t:
             return _err(f"task {task_id} not found")
@@ -531,6 +635,10 @@ def submit_review(task_id: int, verdict: str, comments: str = "") -> dict:
             return _err(f"only the assigned reviewer ({t['reviewer']}) can review task {task_id}")
         if t["owner"] == me:
             return _err("you cannot review your own task")
+        if verdict == "approve" and t["review_sha"] and head and head != t["review_sha"]:
+            return _err(
+                f"the branch moved after review was requested (reviewed {t['review_sha'][:8]}, "
+                f"now {head[:8]}). Ask the owner to request review again.")
         if verdict == "approve":
             c.execute(
                 "UPDATE tasks SET status='done', approved_by=?, updated_at=? WHERE id=?",
@@ -601,6 +709,37 @@ def list_locks() -> list:
     with db() as c:
         _purge_expired_locks(c)
         return [dict(r) for r in c.execute("SELECT * FROM file_locks ORDER BY path")]
+
+
+@mcp.tool()
+def get_diff(task_id: int, max_chars: int = 20000) -> dict:
+    """Show what changed on a task's branch compared with the base branch. For reviewers:
+    this is the exact commit that was submitted for review (`reviewed_sha`), and
+    `changed_since_review` tells you if the owner pushed more commits afterwards."""
+    with db() as c:
+        t = _task(c, task_id)
+    if not t:
+        return _err(f"task {task_id} not found")
+    root = _repo_root()
+    if not root or not t["branch"]:
+        return _err("this task has no branch yet, or no git repository was found "
+                    "(set AGORA_REPO, and AGORA_AUTO_WORKTREE=1 to create branches on claim)")
+    head = _branch_sha(t)
+    if not head:
+        return _err(f"branch '{t['branch']}' does not exist")
+    end = t["review_sha"] or head
+    try:
+        mb = _git(["merge-base", _base_ref(), end], root)
+        start = mb.stdout.strip() if mb.returncode == 0 else _base_ref()
+        stat = _git(["diff", "--stat", f"{start}..{end}"], root).stdout
+        diff = _git(["diff", f"{start}..{end}"], root).stdout
+    except (OSError, subprocess.SubprocessError) as e:
+        return _err(f"git failed: {e}")
+    max_chars = max(1000, min(int(max_chars), 200000))
+    return _ok(task_id=task_id, branch=t["branch"], worktree=t["worktree"], base=start[:12],
+               reviewed_sha=t["review_sha"], head_sha=head,
+               changed_since_review=bool(t["review_sha"] and t["review_sha"] != head),
+               stat=stat, diff=diff[:max_chars], truncated=len(diff) > max_chars)
 
 
 @mcp.tool()

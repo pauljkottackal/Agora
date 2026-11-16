@@ -81,7 +81,7 @@ claim_task  →  lock_files  →  work on a branch  →  request_review  →  su
 | Identity | `whoami`, `heartbeat` |
 | Board | `board`, `list_tasks`, `create_task`, `claim_task`, `update_status` |
 | Messaging | `post_message`, `read_inbox`, `handoff` |
-| Review | `request_review`, `submit_review` |
+| Review | `request_review`, `submit_review`, `get_diff` |
 | Locks | `lock_files`, `unlock_files`, `list_locks` |
 | Listening | `wait_for_work` |
 
@@ -96,6 +96,17 @@ python dashboard.py     # http://127.0.0.1:8765
 A live kanban board with owners, reviewers, active agents, file locks and the message feed. You can create tasks, message agents and unblock stuck tasks, all recorded as `human`.
 
 It runs on `127.0.0.1` only and has no login, so don't expose the port.
+
+## Git integration (optional)
+
+Set `AGORA_AUTO_WORKTREE=1` and `AGORA_REPO` in each agent's MCP `env`. Then:
+
+- `claim_task` creates `agent/<id>/task-<n>` in its own worktree and returns the path, so agents never share a checkout.
+- `request_review` records the exact commit. If `AGORA_TEST_CMD` is set, it runs first and a failure blocks the request.
+- Reviewers call `get_diff` to see the changes. `submit_review(approve)` is refused if the branch moved after the review was requested; the owner re-requests and the reviewer approves the new commit.
+- Handoffs include the branch and worktree, so the next agent continues in the same place.
+
+Nothing touches git unless you turn this on. Worktrees are left in place after a task is done; remove them with `git worktree remove`.
 
 ## Listening mode
 
@@ -122,6 +133,12 @@ python server.py log 50
 | `AGORA_STALE_MIN` | `120` | Minutes of silence before an agent's tasks return to `todo` (`0` = off) |
 | `AGORA_POLL` | `1.0` | `wait_for_work` check interval (seconds) |
 | `AGORA_PORT` | `8765` | Dashboard port |
+| `AGORA_AUTO_WORKTREE` | off | Set to `1`: `claim_task` creates a branch and git worktree for the task |
+| `AGORA_REPO` | current directory | Path of the git repository to use |
+| `AGORA_BASE` | `HEAD` | Branch that new task branches start from and diffs compare against |
+| `AGORA_WORKTREES` | `<repo>-worktrees/` | Where task worktrees are created |
+| `AGORA_TEST_CMD` | none | Command run in the task's worktree before review can be requested; a failure blocks it |
+| `AGORA_TEST_TIMEOUT` | `300` | Seconds before the test command is stopped |
 
 ## Rules the server enforces
 
