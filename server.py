@@ -22,6 +22,7 @@ DEFAULT_DB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "coordinat
 
 LOCK_TTL_MIN = int(os.environ.get("LOCK_TTL_MIN", "30"))
 POLL_SECONDS = float(os.environ.get("AGORA_POLL", "1.0"))   # wait_for_work check interval
+STALE_MIN = int(os.environ.get("AGORA_STALE_MIN", "120"))   # 0 disables stale-owner recovery
 MAX_WAIT_SECONDS = 50                                       # stay under typical tool timeouts
 MAX_MSGS_PER_TASK = int(os.environ.get("MAX_MSGS_PER_TASK", "20"))
 
@@ -78,6 +79,11 @@ CREATE TABLE IF NOT EXISTS events (
   action TEXT,
   payload TEXT,
   at TEXT
+);
+CREATE TABLE IF NOT EXISTS task_seen (
+  task_id INTEGER NOT NULL,
+  agent_id TEXT NOT NULL,
+  PRIMARY KEY (task_id, agent_id)
 );
 CREATE INDEX IF NOT EXISTS idx_messages_task ON messages(task_id);
 CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
@@ -162,6 +168,43 @@ def _norm_path(p):
 
 def _purge_expired_locks(c):
     c.execute("DELETE FROM file_locks WHERE expires_at < ?", (_now(),))
+
+
+# A ready task this agent has not been told about yet. Tracked per agent, so a task that
+# was created while the agent was busy, or that became ready when its dependency finished,
+# is still announced exactly once.
+_UNSEEN_READY = (
+    "status='todo' AND created_by!=? AND (depends_on IS NULL OR depends_on IN "
+    "(SELECT id FROM tasks WHERE status='done')) "
+    "AND id NOT IN (SELECT task_id FROM task_seen WHERE agent_id=?)"
+)
+
+
+def _recover_stale(c):
+    """Release tasks whose owner has not been seen for STALE_MIN minutes, so a crashed
+    agent cannot hold a task forever. Humans never go stale."""
+    if STALE_MIN <= 0:
+        return []
+    cutoff = (datetime.now(timezone.utc) - timedelta(minutes=STALE_MIN)).isoformat(timespec="seconds")
+    rows = c.execute(
+        "SELECT t.id, t.owner FROM tasks t JOIN agents a ON a.id=t.owner "
+        "WHERE t.status IN ('in_progress','changes_requested') AND t.owner!='human' "
+        "AND a.last_seen_at < ?", (cutoff,),
+    ).fetchall()
+    for r in rows:
+        c.execute("UPDATE tasks SET status='todo', owner=NULL, updated_at=? WHERE id=?", (_now(), r["id"]))
+        _release_locks(c, r["owner"], r["id"])
+        c.execute("DELETE FROM task_seen WHERE task_id=?", (r["id"],))
+        _log(c, "stale_released", {"task_id": r["id"], "owner": r["owner"]})
+    return [r["id"] for r in rows]
+
+
+def _unknown_agent_warning(c, name):
+    known = {r[0] for r in c.execute("SELECT id FROM agents")}
+    if name in known:
+        return None
+    return (f"'{name}' has not connected to Agora yet. If that is a typo the task will sit "
+            f"unreviewed. Known agents: {sorted(known)}")
 
 
 def _insert_message(c, task_id, to_agent, kind, body):
@@ -259,6 +302,7 @@ def board() -> dict:
     """Overview: tasks grouped by status, agents with last-seen time, active file locks."""
     with db() as c:
         _purge_expired_locks(c)
+        _recover_stale(c)
         tasks = [dict(r) for r in c.execute("SELECT * FROM tasks ORDER BY id")]
         agents = [dict(r) for r in c.execute("SELECT * FROM agents ORDER BY id")]
         locks = [dict(r) for r in c.execute("SELECT * FROM file_locks ORDER BY path")]
@@ -307,6 +351,7 @@ def claim_task(task_id: int) -> dict:
     task it depends on is not 'done'."""
     me = _agent()
     with db() as c:
+        _recover_stale(c)
         t = _task(c, task_id)
         if not t:
             return _err(f"task {task_id} not found")
@@ -434,7 +479,8 @@ def handoff(task_id: int, to: str, summary: str, files_touched: list[str],
             (to, _now(), task_id),
         )
         _log(c, "handoff", {"task_id": task_id, "to": to})
-        return _ok(task_id=task_id, new_owner=to)
+        w = _unknown_agent_warning(c, to)
+        return _ok(task_id=task_id, new_owner=to, **({"warning": w} if w else {}))
 
 
 @mcp.tool()
@@ -464,7 +510,8 @@ def request_review(task_id: int, reviewer: str, note: str = "") -> dict:
             (reviewer, _now(), task_id),
         )
         _log(c, "request_review", {"task_id": task_id, "reviewer": reviewer})
-        return _ok(task_id=task_id, status="review", reviewer=reviewer)
+        w = _unknown_agent_warning(c, reviewer)
+        return _ok(task_id=task_id, status="review", reviewer=reviewer, **({"warning": w} if w else {}))
 
 
 @mcp.tool()
@@ -565,7 +612,6 @@ def wait_for_work(timeout_seconds: int = 25) -> dict:
     tool again. Also refreshes your presence on the board."""
     me = _agent()
     timeout = max(0, min(int(timeout_seconds), MAX_WAIT_SECONDS))
-    started = _now()
     with db():
         pass  # heartbeat
     deadline = time.monotonic() + timeout
@@ -574,9 +620,7 @@ def wait_for_work(timeout_seconds: int = 25) -> dict:
         try:
             unread = _count_unread(conn, me)
             fresh = conn.execute(
-                "SELECT COUNT(*) FROM tasks WHERE status='todo' AND created_at>=? AND created_by!=? "
-                "AND (depends_on IS NULL OR depends_on IN (SELECT id FROM tasks WHERE status='done'))",
-                (started, me),
+                "SELECT COUNT(*) FROM tasks WHERE " + _UNSEEN_READY, (me, me)
             ).fetchone()[0]
         finally:
             conn.close()
@@ -586,15 +630,17 @@ def wait_for_work(timeout_seconds: int = 25) -> dict:
 
     inbox = read_inbox(mark_read=True)
     with db() as c:
+        _recover_stale(c)
         new_tasks = [
             dict(r)
             for r in c.execute(
-                "SELECT id, title, description, created_by FROM tasks WHERE status='todo' "
-                "AND created_at>=? AND created_by!=? "
-                "AND (depends_on IS NULL OR depends_on IN (SELECT id FROM tasks WHERE status='done'))",
-                (started, me),
+                "SELECT id, title, description, created_by FROM tasks WHERE " + _UNSEEN_READY, (me, me)
             )
         ]
+        c.executemany(
+            "INSERT OR IGNORE INTO task_seen(task_id, agent_id) VALUES(?,?)",
+            [(t["id"], me) for t in new_tasks],
+        )
         pending = {
             "awaiting_my_review": [
                 dict(r) for r in c.execute(
@@ -685,4 +731,7 @@ if __name__ == "__main__":
     if len(sys.argv) > 1:
         _cli(sys.argv[1:])
     else:
+        if os.environ.get("AGENT_ID", "").strip().lower() == "human":
+            sys.exit("AGENT_ID 'human' is reserved for the person using the CLI and dashboard. "
+                     "Give this agent another id.")
         mcp.run()  # stdio

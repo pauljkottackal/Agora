@@ -119,6 +119,7 @@ python server.py log 50
 | `AGENT_ID` / `AGENT_ROLE` | `unknown` / none | Agent name and optional role |
 | `LOCK_TTL_MIN` | `30` | Minutes before a lock expires |
 | `MAX_MSGS_PER_TASK` | `20` | Agent messages allowed per task |
+| `AGORA_STALE_MIN` | `120` | Minutes of silence before an agent's tasks return to `todo` (`0` = off) |
 | `AGORA_POLL` | `1.0` | `wait_for_work` check interval (seconds) |
 | `AGORA_PORT` | `8765` | Dashboard port |
 
@@ -127,6 +128,8 @@ python server.py log 50
 - Claiming is atomic, and a task can't be claimed until its dependency is `done`.
 - `done` is only reachable through an approving review from a reviewer who isn't the owner.
 - File locks are all-or-nothing and expire automatically.
+- A task whose owner goes silent is released back to `todo` so work never gets stuck.
+- `human` is reserved: an agent started with `AGENT_ID=human` is refused.
 - The message cap blocks a task and asks for a human. Your own messages are exempt.
 - Every action is logged in the `events` table.
 

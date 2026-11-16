@@ -1,0 +1,14 @@
+[project]
+name = "agora-mcp"
+version = "0.2.0"
+description = "A shared task board and message bus for AI coding agents, as a single MCP server."
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.10"
+dependencies = ["mcp"]
+
+[project.urls]
+Homepage = "https://github.com/pauljkottackal/Agora"
+
+[tool.setuptools]
+py-modules = ["server", "dashboard"]

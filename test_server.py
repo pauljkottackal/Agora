@@ -188,6 +188,68 @@ class T(unittest.TestCase):
         s.create_task("mine")
         self.assertFalse(s.wait_for_work(0)["woke"])
 
+    # ---- reliability fixes
+    def test_wait_for_work_reports_task_created_while_busy(self):
+        as_agent("antigravity")
+        s.whoami()
+        as_agent("codex")
+        t = self.new_task()                       # created before antigravity starts waiting
+        as_agent("antigravity")
+        r = s.wait_for_work(timeout_seconds=0)
+        self.assertTrue(r["woke"])
+        self.assertEqual([x["id"] for x in r["new_tasks"]], [t])
+        self.assertFalse(s.wait_for_work(timeout_seconds=0)["woke"])   # announced only once
+
+    def test_wait_for_work_reports_task_unblocked_by_dependency(self):
+        a = self.new_task()
+        b = self.new_task(depends_on=a)
+        as_agent("antigravity")
+        r = s.wait_for_work(timeout_seconds=0)
+        self.assertEqual([x["id"] for x in r["new_tasks"]], [a])        # b not ready yet
+        s.claim_task(a)
+        s.request_review(a, "codex")
+        as_agent("codex")
+        s.submit_review(a, "approve")
+        as_agent("antigravity")
+        r = s.wait_for_work(timeout_seconds=0)
+        self.assertEqual([x["id"] for x in r["new_tasks"]], [b])
+
+    def test_unknown_reviewer_and_handoff_target_get_warning(self):
+        t = self.new_task()
+        s.claim_task(t)
+        r = s.request_review(t, "antigravty")                           # typo
+        self.assertTrue(r["ok"])
+        self.assertIn("antigravty", r["warning"])
+
+    def test_stale_owner_task_is_released(self):
+        import sqlite3
+        t = self.new_task()
+        s.claim_task(t)
+        s.lock_files(["a.py"], t)
+        conn = sqlite3.connect(os.environ["COORD_DB"])
+        conn.execute("UPDATE agents SET last_seen_at='2000-01-01T00:00:00+00:00' WHERE id='codex'")
+        conn.commit()
+        conn.close()
+        as_agent("antigravity")
+        self.assertTrue(s.claim_task(t)["ok"])                          # recovered, then claimed
+        self.assertEqual(s.list_locks(), [])
+
+    def test_stale_recovery_can_be_disabled(self):
+        import sqlite3
+        old = s.STALE_MIN
+        s.STALE_MIN = 0
+        try:
+            t = self.new_task()
+            s.claim_task(t)
+            conn = sqlite3.connect(os.environ["COORD_DB"])
+            conn.execute("UPDATE agents SET last_seen_at='2000-01-01T00:00:00+00:00' WHERE id='codex'")
+            conn.commit()
+            conn.close()
+            as_agent("antigravity")
+            self.assertFalse(s.claim_task(t)["ok"])
+        finally:
+            s.STALE_MIN = old
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
